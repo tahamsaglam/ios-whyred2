@@ -150,7 +150,7 @@ new file mode 100644
 +{
 +	/* the branch clocks document a 10 usec retention before the bus
 +	 * may be touched */
-+	IODelay(10);
++	delay(10);
 +}
 +
 +static void
@@ -159,9 +159,9 @@ new file mode 100644
 +	uint32_t *res = io_win(TLMM_CTL(GPIO_TOUCH_RES), 4);
 +
 +	*res = TLMM_OUT(0) | TLMM_DRV_2MA | TLMM_OE;  /* RES low */
-+	IODelay(20000);
++	delay(20000);
 +	*res = TLMM_OUT(1) | TLMM_DRV_2MA | TLMM_OE;  /* RES high */
-+	IODelay(200000);
++	delay(200000);
 +}
 +
 +static void
