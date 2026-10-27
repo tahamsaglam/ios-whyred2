@@ -19,7 +19,7 @@ diff --git a/bsd/dev/sweet_i2c.c b/bsd/dev/sweet_i2c.c
 new file mode 100644
 --- /dev/null
 +++ b/bsd/dev/sweet_i2c.c
-@@ -0,0 +1,334 @@
+@@ -0,0 +1,330 @@
 +/*
 + * whyred / SDM636: BLSP1 QUP v2 I2C master on i2c_1.
 + *
@@ -40,17 +40,15 @@ new file mode 100644
 + */
 +
 +#include <machine/machine_routines.h>
-+#include <platform/platform.h>
++#include <pexpert/pexpert.h>
 +#include <sys/param.h>
 +
 +#include <sys/systm.h>
 +#include <stdint.h>
 +#include <vm/pmap.h>
 +
-+
-+extern int PE_parse_boot_argn(const char *arg_string, void *arg_ptr,
-+    int arg_len);
 +extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
++extern int sweet_i2c_probe(void);
 +
 +/* GCC clock tree (gcc-sdm660.c) */
 +#define GCC_BASE                0x00005000u
@@ -150,11 +148,9 @@ new file mode 100644
 +static void
 +clk_delay(void)
 +{
-+	/* ~10 usec on the 19.2 MHz reference; the branch clocks document a
-+	 * 10 usec retention before the bus may be touched. */
-+	for (volatile int i = 0; i < 200; i++)
-+		;
-+	ml_delay_onloop(2);
++	/* the branch clocks document a 10 usec retention before the bus
++	 * may be touched */
++	IODelay(10);
 +}
 +
 +static void
@@ -163,9 +159,9 @@ new file mode 100644
 +	uint32_t *res = io_win(TLMM_CTL(GPIO_TOUCH_RES), 4);
 +
 +	*res = TLMM_OUT(0) | TLMM_DRV_2MA | TLMM_OE;  /* RES low */
-+	ml_delay_onloop(20);
++	IODelay(20000);
 +	*res = TLMM_OUT(1) | TLMM_DRV_2MA | TLMM_OE;  /* RES high */
-+	ml_delay_onloop(200);
++	IODelay(200000);
 +}
 +
 +static void
