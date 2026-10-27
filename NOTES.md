@@ -75,9 +75,18 @@ the volume-up pin.
 
 Flash: `fastboot -S 512M flash userdata ios16-root.simg` (~5 min),
 `fastboot flash recovery shim-boot.img`, `fastboot reboot recovery`.
-First boot task: pull the SYSTEM ring with `tools/sweet-log-pull.sh` and
-`grep 'SWEET FB: '` — the user client logs every selector backboardd calls,
-which names the presentation gap exactly.
+For the `sweeti2c=1` image the evidence is on the **screen**: the normal
+image has no `sweetlog=1`, so there is no SYSTEM ring; read the printed
+`SWEET I2C:` (window/PID bytes or the NACK + OPER/STATUS dump) and
+`SWEET KEYS: arb=` lines off the framebuffer console, or flash the
+`-log` image instead and use `tools/sweet-log-pull.sh`.
+
+**Dispatch gotcha**: `gh workflow run -f key=val` silently drops all
+workflow inputs here (recorded `inputs: null`, build saw
+`MODE="both" EXTRA_IN=""`); dispatch with raw REST instead:
+`curl -X POST -H "Authorization: token $(gh auth token)" -d
+'{"ref":"whyred","inputs":{"build_mode":"normal","extra_args":"sweeti2c=1"}}'
+https://api.github.com/repos/tahamsaglam/ios-whyred2/actions/workflows/xnu.yml/dispatches`.
 
 ## 0173 build fix (2026-10-27): the first image booted the ramdisk probe
 
