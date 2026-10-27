@@ -4144,11 +4144,12 @@ What it took today (in order): 0058 HID services (Apple IOHIDFamily-1915 user cl
   5. panic hook at top of panic_trap_to_debugger: va_copy + _doprnt(fmt, &copy, sweet_early_putc, 16).
   Verify with tools/xnu-cc.py (compile+symbols) and patch-order simulation before the single CI run.
 
-## WLAN / audio silicon facts for the next cuts (2026-10-27, partial vendor mirror)
+## WLAN / audio silicon facts for the next cuts (2026-10-27, vendor kernel via git objects)
 
-The local mirror `refs/whyred-android` holds only the board files plus
-`sdm660.dtsi`/`sdm630.dtsi` fragments, so these are the load-bearing facts
-that **are** in it; everything else stays open.
+`refs/whyred-android` is a full clone of
+`LineageOS/android_kernel_xiaomi_sdm660` (lineage-20, `49688d875`) with a
+sparse worktree - `git show HEAD:<path>` / `git grep <pat> HEAD -- <dir>`
+reach **every** file, so no fact below needs a re-download.
 
 WLAN (sdm660.dtsi ~2155-2190): the wlan client is a PCIe prima-class chip —
 the node carries `qcom,wlan-msa-memory = <0x100000>`, CE0..CE11 GIC interrupts
@@ -4162,6 +4163,17 @@ already ports (`drivers/wifi`, QCA6391 over PCIe) — so the whyred wifi cut
 is board bring-up (RC clk/reset/gpio + those four rails via the PMIC arbiter
 v2 lanes 0181 just learned to read), not a new chip.
 
-Audio: no wcd9xxx/codec or LPASS audio node exists in the mirrored files;
-codec identity is OPEN. Do not start the audio driver until the full
-xiaomi_sdm660 tree (or a running Android's /proc/device-tree) names it.
+Audio (whole-tree read via `git show HEAD:<path>`, the worktree being
+sparse): board chain `xiaomi/whyred.dtsi` -> longcheer common ->
+`whyred-base.dtsi` enables **sdm660-internal-codec.dtsi**: `int_codec`
+(machine `qcom,sdm660-asoc-snd`), `pmic_analog_codec` = `anlg-cdc@f000`
+(`qcom,pmic-analog-codec`, SPMI USID 0xf on the bus 0181 already drives,
+parent `spmi_bus`) and `msm_sdw_codec` **okay**, while SLIM and its
+`wcd9335`/`wcd934x` nodes are **disabled** - the codec is the
+PM660L-integrated analog one over SPMI plus a SoundWire path. Speaker
+PA on `i2c_6`: `ti,tas2557@4c` (vdd/vcc_i2c = pm660l_l6, reset gpio 77,
+irq gpio 73) and `max98927@3a` in longcheer common; which is populated
+is open. i2c_6 is the same QUP v2 block 0180 masters on i2c_1, so the
+PA probe reuses sweet_i2c with one new base. Actual playback needs the
+LPASS Q6/SPF stack (ADSP remoteproc + APR/GPR) that nothing in
+ios-sweet has booted: biggest remaining subsystem, order after wifi.
