@@ -4177,3 +4177,10 @@ is open. i2c_6 is the same QUP v2 block 0180 masters on i2c_1, so the
 PA probe reuses sweet_i2c with one new base. Actual playback needs the
 LPASS Q6/SPF stack (ADSP remoteproc + APR/GPR) that nothing in
 ios-sweet has booted: biggest remaining subsystem, order after wifi.
+PA identity note: longcheer common enables tas2557@4c, max98927L@3a AND
+tfa98xx@34 on i2c_6 at once (all share reset gpio 77, vdd pm660l_l6; TI +
+NXP also irq 73). The DT therefore cannot name the populated chip - Linux
+relies on I2C probe failure to sort it. Our audio cut resolves it the same
+way sweeti2c resolves the panel: one gated probe pass reading the device-id
+register at each of 0x4c/0x3a/0x34 through the Q2 master (new base GCC
+BLSP2/QUP2 i2c_6 branch, TLMM pins per sdm660-qrd i2c_6 state).
