@@ -1,0 +1,375 @@
+whyred: BLSP1 QUP v2 I2C master on i2c_1; probe the NVT touch chip id.
+
+Registers, GCC clocks, TLMM mux and the NVT reset/power sequence are
+taken from the vendor sdm660 kernel (verified against it line by line).
+Gated by the "sweeti2c=1" boot arg; prints every result as "SWEET I2C".
+
+diff --git a/bsd/conf/files b/bsd/conf/files
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -109,6 +109,7 @@ bsd/dev/sweet_touch.c			standard
+ bsd/dev/sweet_rpmh.c			standard
+ bsd/dev/sweet_spmi.c			standard
+ bsd/dev/sweet_usb.c			standard
++bsd/dev/sweet_i2c.c			standard
+ bsd/dev/mem.c				standard
+ bsd/dev/munge.c 			optional config_requires_u32_munging
+ bsd/dev/unix_startup.c			standard
+diff --git a/bsd/dev/sweet_i2c.c b/bsd/dev/sweet_i2c.c
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/sweet_i2c.c
+@@ -0,0 +1,334 @@
++/*
++ * whyred / SDM636: BLSP1 QUP v2 I2C master on i2c_1.
++ *
++ * First driver of the touch series. It brings up the QUP v2 core the way
++ * the vendor Linux drivers do -- GCC clock tree by hand, BLSP1_AHB on,
++ * blsp1_qup1_i2c_apps_clk_src parented to CXO (19.2 MHz) with a 400 kHz
++ * divider, SE in FIFO master mode with QUP v2 tags -- and reads the NVT
++ * touch controller's chip id over the bus. Everything it prints is tagged
++ * "SWEET I2C"; gated by the "sweeti2c=1" boot arg.
++ *
++ * Offsets taken from the vendor kernel:
++ *   SE/QUP:     drivers/i2c/busses/i2c-qup.c, drivers/i2c/busses/i2c-qup.h
++ *               drivers/i2c/busses/i2c-msm-v2.c
++ *   GCC:        drivers/clk/qcom/gcc-sdm660.c
++ *   TLMM:       drivers/pinctrl/qcom/pinctrl-sdm660.c, sdm660-pinctrl.dtsi
++ *   touch:      drivers/input/touchscreen/nvt_touch_e7s/nvt_drv.c,
++ *               sdm636-touchpad-whyred.dsi
++ */
++
++#include <machine/machine_routines.h>
++#include <platform/platform.h>
++#include <sys/param.h>
++
++#include <sys/systm.h>
++#include <stdint.h>
++#include <vm/pmap.h>
++
++
++extern int PE_parse_boot_argn(const char *arg_string, void *arg_ptr,
++    int arg_len);
++extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
++
++/* GCC clock tree (gcc-sdm660.c) */
++#define GCC_BASE                0x00005000u
++#define GCC_BLSP1_AHB           (GCC_BASE + 0x52004)
++#define GCC_BLSP1_AHB_ENA       (1u << 1)
++#define GCC_I2C1_APPS           (GCC_BASE + 0x19008)
++#define GCC_I2C1_APPS_ENA       (1u << 1)
++#define GCC_I2C1_SRC            (GCC_BASE + 0x19020)
++#define GCC_SRC_CFG_SRC(x)      ((x) << 12)       /* CFG_SRC, bits 16:12 */
++#define GCC_SRC_CACHE_ENA       (1u << 9)         /* rcg2 CACHE_ENABLE */
++#define GCC_SRC_ALT_SRC         (1u << 2)
++#define CXO_PARENT              2u                 /* gcc_parent_map_1 */
++#define CXO_HZ                  19200000u
++
++/* BLSP1_QUP1_I2C_MASTER (qcom,i2c-msm-v2 @ 0x0c175000, i2c-qup.c/h) */
++#define QUP_BASE                0x0c175000u
++#define QUP_CONFIG              0x000
++#define  QUP_SOFT_RESET         (1u << 31)
++#define  QUP_V2_MODE_ENA        (1u << 30)
++#define  QUP_MINI_CORE          (2u << 8)          /* SE core type */
++#define  QUP_I2C_N_VAL          7u                 /* i2c-qup.h V2 */
++#define QUP_STATE               0x004
++#define  QUP_RUN                1u
++#define  QUP_FLUSH              (1u << 6)
++#define  QUP_MAST_GEN           (1u << 4)
++#define  QUP_STATE_VALID        (1u << 2)
++#define QUP_IO_MODES            0x008
++#define  QUP_OUT_BLOCK          (1u << 10)
++#define  QUP_IN_BLOCK           (1u << 12)
++#define  QUP_REPACK             (3u << 14)
++#define QUP_OPERATIONAL         0x018
++#define  OP_OUT_NOT_EMPTY       (1u << 4)
++#define  OP_IN_NOT_EMPTY        (1u << 5)
++#define  OP_OUT_FULL            (1u << 6)
++#define  OP_NO_INPUT            (1u << 7)
++#define  OP_OUT_SVC             (1u << 8)
++#define  OP_IN_SVC              (1u << 9)
++#define  OP_OUT_DONE            (1u << 10)
++#define  OP_IN_DONE             (1u << 11)
++#define QUP_ERROR_FLAGS         0x01c
++#define QUP_ERROR_FLAGS_EN      0x020
++#define  ERR_ALL                0x7cu              /* i2c-qup.c mask */
++#define QUP_MX_OUTPUT_CNT       0x100
++#define QUP_OUT_FIFO            0x110
++#define QUP_MX_WRITE_CNT        0x150
++#define QUP_MX_INPUT_CNT        0x200
++#define QUP_MX_READ_CNT         0x208
++#define QUP_IN_FIFO             0x218
++#define QUP_I2C_CLK_CTL         0x400
++#define  CLK_TLOW(v)            (((v) & 0xffu) << 16)
++#define  CLK_THIGH(v)           ((v) & 0xffu)
++#define QUP_I2C_STATUS          0x404
++#define  ST_NACK                (1u << 3)
++
++/* QUP v2 FIFO tags (i2c-qup.h, TAG2_* in include/linux/i2c-msm-v2.h) */
++#define TAG_START               0x81u
++#define TAG_DATA_WR             0x82u
++#define TAG_DATA_WR_NSTOP       0x83u
++#define TAG_DATA_RD             0x85u
++#define TAG_DATA_RD_STOP        0x87u
++
++/* TLMM (pinctrl-sdm660.c: gpio_n ctl at 0x1000*n, mux bits 6:2; the
++ * gpio2/gpio3 mux list places blsp_i2c1 at function 19) */
++#define TLMM_BASE               0x03000000u
++#define TLMM_CTL(n)             (TLMM_BASE + 0x1000u * (n))
++#define TLMM_MUX(v)             (((v) & 0x1fu) << 2)
++#define TLMM_OUT(v)             (((v) & 1u) << 1)
++#define TLMM_DRV_2MA            (0u << 6)
++#define TLMM_OE                 (1u << 9)
++#define GPIO_I2C_SDA            2
++#define GPIO_I2C_SCL            3
++#define GPIO_TOUCH_RES          66               /* nvt,reset-gpio */
++#define PIN_I2C_SEL             19u
++
++/* NVT NT36672 (novatek@62 in sdm636-touchpad-whyred.dsi,
++ * nvt_touch_e7s/nt36xxx.c nvt_read_pid): host slave 0x62, firmware slave
++ * 0x01 (I2C_FW_Address). Firmware memory is read through an address
++ * window: write {0xFF, addr >> 16, addr >> 8}, then read. Default event
++ * buffer 0x11E00 (nt36xxx.c); bytes 1-2 of the read are the project id. */
++#define NVT_HOST_ADDR           0x62u
++#define NVT_FW_ADDR             0x01u
++#define NVT_WINDOW_OP           0xFFu
++#define NVT_EVT_HI              0x01u               /* 0x11E00 >> 16 */
++#define NVT_EVT_MID             0x1Eu               /* 0x11E00 >> 8  */
++#define NVT_PID_LEN             8
++
++int sweet_i2c_enabled = 0;
++
++static uint32_t *qup;
++
++static uint32_t *
++io_win(uint32_t phys, uint32_t size)
++{
++	return (uint32_t *) ml_io_map((vm_offset_t) phys, (vm_size_t) size);
++}
++
++static void
++clk_delay(void)
++{
++	/* ~10 usec on the 19.2 MHz reference; the branch clocks document a
++	 * 10 usec retention before the bus may be touched. */
++	for (volatile int i = 0; i < 200; i++)
++		;
++	ml_delay_onloop(2);
++}
++
++static void
++touch_reset(void)
++{
++	uint32_t *res = io_win(TLMM_CTL(GPIO_TOUCH_RES), 4);
++
++	*res = TLMM_OUT(0) | TLMM_DRV_2MA | TLMM_OE;  /* RES low */
++	ml_delay_onloop(20);
++	*res = TLMM_OUT(1) | TLMM_DRV_2MA | TLMM_OE;  /* RES high */
++	ml_delay_onloop(200);
++}
++
++static void
++pins_i2c(void)
++{
++	uint32_t *sda = io_win(TLMM_CTL(GPIO_I2C_SDA), 4);
++	uint32_t *scl = io_win(TLMM_CTL(GPIO_I2C_SCL), 4);
++
++	*sda = TLMM_MUX(PIN_I2C_SEL) | TLMM_DRV_2MA;
++	*scl = TLMM_MUX(PIN_I2C_SEL) | TLMM_DRV_2MA;
++}
++
++static int
++clocks_on(void)
++{
++	volatile uint32_t *ahb = io_win(GCC_BLSP1_AHB, 4);
++	volatile uint32_t *src = io_win(GCC_I2C1_SRC, 4);
++	volatile uint32_t *app = io_win(GCC_I2C1_APPS, 4);
++
++	*ahb = GCC_BLSP1_AHB_ENA;
++	clk_delay();
++	if ((*ahb & GCC_BLSP1_AHB_ENA) == 0) {
++		printf("SWEET I2C: GCC 0x%x AHB branch would not stick "
++		    "(read 0x%08x)\n", GCC_BLSP1_AHB, *ahb);
++		return -1;
++	}
++	/* 400 kHz from 19.2 MHz: div = 19.2M/400k - 2*(10+4) = 28,
++	 * low = high = div - 1 - 4 = 75 (0x4b), vendor table
++	 * i2c-msm-v2.c I2C_MSM_CLK_FAST. */
++	*src = GCC_SRC_CFG_SRC(CXO_PARENT) | GCC_SRC_ALT_SRC;
++	*src |= GCC_SRC_CACHE_ENA;
++	clk_delay();
++	*app = GCC_I2C1_APPS_ENA;
++	clk_delay();
++	if ((*app & GCC_I2C1_APPS_ENA) == 0) {
++		printf("SWEET I2C: GCC 0x%x I2C apps branch would not stick "
++		    "(read 0x%08x)\n", GCC_I2C1_APPS, *app);
++		return -1;
++	}
++	return 0;
++}
++
++static void
++se_reset(void)
++{
++	qup[QUP_CONFIG / 4] |= QUP_SOFT_RESET;
++	for (int i = 0; i < 100; i++)
++		if ((qup[QUP_CONFIG / 4] & QUP_SOFT_RESET) == 0)
++			return;
++	printf("SWEET I2C: QUP soft reset did not clear (CONFIG 0x%08x)\n",
++	    qup[QUP_CONFIG / 4]);
++}
++
++static void
++se_state(uint32_t state)
++{
++	qup[QUP_STATE / 4] = state | QUP_STATE_VALID;
++	for (int i = 0; i < 1000; i++)
++		if ((qup[QUP_STATE / 4] & QUP_STATE_VALID) == 0)
++			return;
++	printf("SWEET I2C: QUP state 0x%08x never validated "
++	    "(STATE 0x%08x)\n", state, qup[QUP_STATE / 4]);
++}
++
++static void
++se_wait_done(uint32_t done)
++{
++	for (int i = 0; i < 100000; i++) {
++		uint32_t op = qup[QUP_OPERATIONAL / 4];
++
++		if (op & done)
++			return;
++		if (qup[QUP_ERROR_FLAGS / 4] & ERR_ALL)
++			return;
++	}
++	printf("SWEET I2C: timeout OPER 0x%08x ERR 0x%08x STATUS 0x%08x\n",
++	    qup[QUP_OPERATIONAL / 4], qup[QUP_ERROR_FLAGS / 4],
++	    qup[QUP_I2C_STATUS / 4]);
++}
++
++static int
++se_run(void)
++{
++	qup[QUP_CONFIG / 4] = QUP_MINI_CORE | QUP_I2C_N_VAL | QUP_V2_MODE_ENA;
++	qup[QUP_I2C_CLK_CTL / 4] = CLK_TLOW(0x4b) | CLK_THIGH(0x4b);
++	qup[QUP_ERROR_FLAGS_EN / 4] = ERR_ALL;
++	qup[QUP_IO_MODES / 4] = QUP_OUT_BLOCK | QUP_IN_BLOCK | QUP_REPACK;
++	se_state(QUP_RUN);
++	return 0;
++}
++
++/*
++ * FIFO+TAGS sequence per i2c-qup.c master path: one write burst ending
++ * without a stop, then one read ending with a stop, both to the same
++ * slave. Whether QUP_MX_WRITE_CNT/QUP_MX_READ_CNT count raw data bytes
++ * or tag-inclusive words is a known bring-up unknown; if wrong it shows
++ * up as timeout/OPER/STATUS printouts, not as a hang (loops are bounded).
++ * wl <= 4 write bytes fit in one packed word.
++ */
++static int
++xfer(uint32_t addr, const uint8_t *wb, int wl, uint8_t *rb, int rl)
++{
++	uint32_t cmd_wr = (TAG_START << 16) | (TAG_DATA_WR_NSTOP << 8) |
++	    (addr << 1);
++	uint32_t cmd_rd = (TAG_START << 16) | (TAG_DATA_RD_STOP << 8) |
++	    ((addr << 1) | 1u);
++
++	se_reset();
++	se_run();
++
++	if (wl) {
++		uint32_t data = 0;
++
++		for (int i = 0; i < wl; i++)     /* REPACK unpacks MSB first */
++			data = (data << 8) | wb[i];
++		qup[QUP_MX_WRITE_CNT / 4] = (uint32_t) wl;
++		qup[QUP_MX_OUTPUT_CNT / 4] = (uint32_t) ((wl + 3) / 4) + 1;
++		qup[QUP_OUT_FIFO / 4] = cmd_wr;
++		qup[QUP_OUT_FIFO / 4] = data;
++		se_wait_done(OP_OUT_DONE);
++		if (qup[QUP_ERROR_FLAGS / 4] & ERR_ALL) {
++			printf("SWEET I2C: write phase ERR 0x%08x "
++			    "STATUS 0x%08x\n", qup[QUP_ERROR_FLAGS / 4],
++			    qup[QUP_I2C_STATUS / 4]);
++			return -1;
++		}
++		if (qup[QUP_I2C_STATUS / 4] & ST_NACK) {
++			printf("SWEET I2C: NACK from 0x%02x (STATUS "
++			    "0x%08x)\n", addr, qup[QUP_I2C_STATUS / 4]);
++			return -1;
++		}
++		qup[QUP_OPERATIONAL / 4] = OP_OUT_DONE | QUP_STATE_VALID;
++	}
++
++	if (rl) {
++		qup[QUP_MX_READ_CNT / 4] = (uint32_t) rl;
++		qup[QUP_MX_INPUT_CNT / 4] = (uint32_t) rl;
++		qup[QUP_OUT_FIFO / 4] = cmd_rd;
++		se_wait_done(OP_IN_DONE);
++		if (qup[QUP_ERROR_FLAGS / 4] & ERR_ALL) {
++			printf("SWEET I2C: read phase ERR 0x%08x "
++			    "STATUS 0x%08x\n", qup[QUP_ERROR_FLAGS / 4],
++			    qup[QUP_I2C_STATUS / 4]);
++			return -1;
++		}
++		for (int i = 0; i < rl; i++)
++			rb[i] = (uint8_t) qup[QUP_IN_FIFO / 4];
++	}
++	qup[QUP_STATE / 4] = QUP_FLUSH | QUP_STATE_VALID;
++	return 0;
++}
++
++int
++sweet_i2c_probe(void)
++{
++	uint8_t win[3] = {NVT_WINDOW_OP, NVT_EVT_HI, NVT_EVT_MID};
++	uint8_t pid[NVT_PID_LEN];
++
++	if (!PE_parse_boot_argn("sweeti2c", &sweet_i2c_enabled,
++	    sizeof(sweet_i2c_enabled)))
++		return 0;
++
++	printf("SWEET I2C: probing NVT touch on BLSP1 QUP1 I2C\n");
++	/* No separate touch power rail on whyred: the novatek node's
++	 * supplies are commented out and ABL already leaves the panel
++	 * rails on for charger-mode touch. */
++	pins_i2c();
++	if (clocks_on())
++		return -1;
++	touch_reset();
++
++	qup = io_win(QUP_BASE, 0x1000);
++	if (qup == NULL) {
++		printf("SWEET I2C: cannot map BLSP1 QUP1\n");
++		return -1;
++	}
++	printf("SWEET I2C: HW_VERSION 0x%08x (v2 = 0x0002xxxx)\n",
++	    qup[0x30 / 4]);
++
++	if (xfer(NVT_FW_ADDR, win, 3, NULL, 0) == 0 &&
++	    xfer(NVT_FW_ADDR, NULL, 0, pid, NVT_PID_LEN) == 0)
++		printf("SWEET I2C: window 0x11E00 = %02x %02x %02x %02x "
++		    "%02x %02x %02x %02x (pid_lo pid_hi = %02x %02x)\n",
++		    pid[0], pid[1], pid[2], pid[3], pid[4], pid[5], pid[6],
++		    pid[7], pid[1], pid[2]);
++	se_state(0);
++	return 0;
++}
+diff --git a/iokit/bsddev/IOKitBSDInit.cpp b/iokit/bsddev/IOKitBSDInit.cpp
+--- a/iokit/bsddev/IOKitBSDInit.cpp
++++ b/iokit/bsddev/IOKitBSDInit.cpp
+@@ -809,6 +809,15 @@
+ 			    emmc_error, santoni_sdhci_failure_text());
+ 		}
+ 	}
++
++	/*
++	 * whyred: BLSP1 QUP1 I2C master, probe the NVT touch controller.
++	 * Gated by the sweeti2c=1 boot arg inside the driver.
++	 */
++	{
++		extern int sweet_i2c_probe(void);
++		sweet_i2c_probe();
++	}
+ 	if (strcmp(rdBootVar, "emmcroot0") == 0) {
+ 		extern int santoni_sdhci_rootdev(dev_t *dev);
+ 		OSSafeReleaseNULL(matching);

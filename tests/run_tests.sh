@@ -21,6 +21,7 @@ mkdir -p "$OUT"
 P142="xnu/patches/0142-santoni-sdhci-emmc-driver.patch"
 P143="xnu/patches/0143-santoni-persistent-console-log.patch"
 P144="xnu/patches/0144-santoni-4k-unsigned-dyld-cache.patch"
+P180="xnu/patches/0180-whyred-blsp-qup-i2c-touch-probe.patch"
 
 echo "== host unit tests (-Wall -Wextra) =="
 for t in test_sdhci_mock test_gpt_parser test_log_ring; do
@@ -818,6 +819,28 @@ grep -q -- '--require unentitled_ios_sim_launch=1' .github/workflows/xnu.yml
 echo "ok   normal image has no log capture, log image keeps ring and dumps"
 echo "ok   COMMON keeps every code-signing switch and the payload check requires it"
 
+
+echo "== TOUCH-01: BLSP QUP v2 I2C on i2c_1 (0180) =="
+test -f "$P180"
+for want in \
+	'+++ b/bsd/dev/sweet_i2c.c' \
+	'#define QUP_BASE                0x0c175000u' \
+	'#define GCC_I2C1_APPS           (GCC_BASE + 0x19008)' \
+	'#define GCC_BLSP1_AHB           (GCC_BASE + 0x52004)' \
+	'#define NVT_HOST_ADDR           0x62u' \
+	'sweeti2c' \
+	'SWEET I2C: window 0x11E00' \
+	'extern int sweet_i2c_probe(void);' \
+	'sweet_i2c_probe();'
+do
+	grep -qF -- "$want" "$P180" || {
+		echo "0180 does not ship: $want"; exit 1; }
+done
+if [ -n "${XNU_SRC:-}" ]; then
+	(cd "$XNU_SRC" && git apply --check "$OLDPWD/$P180") || {
+		echo "0180 does not apply to $XNU_SRC"; exit 1; }
+fi
+echo "ok   0180 ships the QUP/GCC/TLMM/NVT constants and hooks the probe"
 # Optional deep check: if a patched XNU source tree is provided, the three
 # patches must also apply to it as-is (git apply --check).
 if [ -n "${XNU_SRC:-}" ]; then

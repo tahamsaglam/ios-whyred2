@@ -36,12 +36,29 @@ containers created. `d22ap.adt` (186,084 B, extracted from
   + `mount -o force,sync`) and is resumable; 7 MB/s but completes.
 
 **NT36672 constants** (from `sdm636-touchpad-whyred.dsi`, e7s board): I2C bus
-`i2c_1`, NVT addr `0x62`, reset TLMM GPIO 66 (active-low, 20 ms pulse, 200 ms
-settle), IRQ GPIO 67 falling/oneshot; the panel variant may instead answer as
-Synaptics DSX at `0x20` (bootloader addr, `0x2c` ub) — probe both, like the
-vendor driver. MP criteria blocks (`novatek-mp-criteria-5904/590D`) matter
-only for factory test, not bring-up. No Quartic I2C host driver exists in
-this kernel yet; that is the first patch of the touch series.
+`i2c_1` = BLSP1 QUP **v2** (`qcom,i2c-msm-v2` @ `0x0c175000`, GIC SPI 95,
+pins GPIO2/3 mux sel 19 `blsp_i2c1`, clocks GCC `0x52004` BLSP1_AHB +
+`0x19008` I2C apps, RCG `0x19020` parent CXO; 400 kHz CLK_CTL `0x004b004b`)
+- **not GenI**. NVT host `0x62`, firmware slave `0x01`; there is no chip-id
+register to read at bring-up: write the address window `{ff 01 1e}` (event
+buffer `0x11E00`) to `0x01`, then read 8 bytes, bytes 1-2 are the project
+id (`nvt_read_pid()` in `nt36xxx.c`). Reset GPIO 66 (active-low, 20 ms,
+200 ms settle), IRQ GPIO 67 falling/oneshot. There is **no** touch power
+rail GPIO on whyred: the novatek node's supplies are commented out in the
+DSI and ABL leaves the rails on for charger-mode touch - no PMIC write is
+needed to probe. (For the buttons/RTC patches: PMIC arbiter is v2, core
+`0x0800f000`, per-APID WR channel `0x08400000` + `0x10000 * apid` with
+CMD 0x00/STATUS 0x08/WDATA0 0x10, CNFG `0x0800a000` with the APID map at
+cnfg + 0x1000 + 4 * apid (valid BIT(15), ppid = entry >> 16),
+cmd = `(opc << 27) | ((addr & 0xff) << 4) | bc`, data written *before*
+the cmd, DONE BIT(0) and failures in bits 1-3 - see the in-tree
+`drivers/spmi/spmi-pmic-arb.c`.) A DSX panel variant may instead answer
+on `0x20` (`0x2c` ub) - probe both, like the vendor driver. First
+patch of the series: **0180** `bsd/dev/sweet_i2c.c` (boot arg `sweeti2c=1`,
+every result on the console as `SWEET I2C:`, prints HW_VERSION and the
+window dump; `QUP_MX_WRITE_CNT/READ_CNT` semantics under v2 TAGS is a
+declared hardware unknown and shows up as OPER/STATUS printouts, the poll
+loops are bounded so it cannot hang).
 
 Flash: `fastboot -S 512M flash userdata ios16-root.simg` (~5 min),
 `fastboot flash recovery shim-boot.img`, `fastboot reboot recovery`.
