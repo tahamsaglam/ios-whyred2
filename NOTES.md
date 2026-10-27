@@ -35,6 +35,14 @@ containers created. `d22ap.adt` (186,084 B, extracted from
   (FUSE extract to plain tree first; HFS+ written via `losetup --direct-io`
   + `mount -o force,sync`) and is resumable; 7 MB/s but completes.
 
+**NT36672 constants** (from `sdm636-touchpad-whyred.dsi`, e7s board): I2C bus
+`i2c_1`, NVT addr `0x62`, reset TLMM GPIO 66 (active-low, 20 ms pulse, 200 ms
+settle), IRQ GPIO 67 falling/oneshot; the panel variant may instead answer as
+Synaptics DSX at `0x20` (bootloader addr, `0x2c` ub) — probe both, like the
+vendor driver. MP criteria blocks (`novatek-mp-criteria-5904/590D`) matter
+only for factory test, not bring-up. No Quartic I2C host driver exists in
+this kernel yet; that is the first patch of the touch series.
+
 Flash: `fastboot -S 512M flash userdata ios16-root.simg` (~5 min),
 `fastboot flash recovery shim-boot.img`, `fastboot reboot recovery`.
 First boot task: pull the SYSTEM ring with `tools/sweet-log-pull.sh` and
