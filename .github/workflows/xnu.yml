@@ -23,6 +23,10 @@ on:
           - normal
           - log
         default: both
+      extra_args:
+        description: extra boot args for every image (e.g. sweeti2c=1)
+        required: false
+        default: ''
   push:
     branches: [main, santoni, lavender, whyred]
     paths:
@@ -277,6 +281,11 @@ jobs:
           # to see whether MDSS still scans the ABL splash out.
           COMMON="emmcrw=1 cs_enforcement_disable=1 unentitled_ios_sim_launch=1"
           COMMON="$COMMON launchd_unsecure_cache=1 sweetfbtest=1"
+          # whyred's ABL stubs fastboot boot, so a gated probe (sweeti2c=1,
+          # ...) can only ride a flashable image: dispatch extra_args
+          # appends to COMMON, which reaches both the normal and log image.
+          EXTRA_IN="${{ inputs.extra_args }}"
+          [ -z "$EXTRA_IN" ] || COMMON="$COMMON $EXTRA_IN"
           # Log mode: sweetlog=1 records every console character to the 4 MiB
           # ring on SYSTEM, cs_debug=2 prints the CD dump and the per-blob
           # line for every validated page (megabytes), and
