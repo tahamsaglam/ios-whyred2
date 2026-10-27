@@ -4143,3 +4143,25 @@ What it took today (in order): 0058 HID services (Apple IOHIDFamily-1915 user cl
      cpu_init, before arm_vm_init.
   5. panic hook at top of panic_trap_to_debugger: va_copy + _doprnt(fmt, &copy, sweet_early_putc, 16).
   Verify with tools/xnu-cc.py (compile+symbols) and patch-order simulation before the single CI run.
+
+## WLAN / audio silicon facts for the next cuts (2026-10-27, partial vendor mirror)
+
+The local mirror `refs/whyred-android` holds only the board files plus
+`sdm660.dtsi`/`sdm630.dtsi` fragments, so these are the load-bearing facts
+that **are** in it; everything else stays open.
+
+WLAN (sdm660.dtsi ~2155-2190): the wlan client is a PCIe prima-class chip —
+the node carries `qcom,wlan-msa-memory = <0x100000>`, CE0..CE11 GIC interrupts
+(CE11 at SPI 425), `qcom,iommu-dma = "bypass"`, and `smp2p_wlan` channels.
+Power rails pin it to the PM660/PM660L regulator set: `vdd-cx-mx` = pm660_l5
+(848000), `vdd-1.8-xo` = pm660_l9_pin_ctrl (1750000..1900000), `vdd-1.3-rfa`
+= pm660_l6_pin_ctrl, `vdd-3.3-ch0` = pm660_l19_pin_ctrl (3200000..3400000).
+That is the WCN3680B/prima pairing of the sdm660 family [INFERENCE: exact
+chip id is not in the mirror], and it is the **same driver family** sweet
+already ports (`drivers/wifi`, QCA6391 over PCIe) — so the whyred wifi cut
+is board bring-up (RC clk/reset/gpio + those four rails via the PMIC arbiter
+v2 lanes 0181 just learned to read), not a new chip.
+
+Audio: no wcd9xxx/codec or LPASS audio node exists in the mirrored files;
+codec identity is OPEN. Do not start the audio driver until the full
+xiaomi_sdm660 tree (or a running Android's /proc/device-tree) names it.
