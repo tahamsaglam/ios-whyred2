@@ -1,5 +1,46 @@
 # iOS 16 on lavender (Redmi Note 7, SDM660) / whyred (Redmi Note 5, SDM636) - working notes
 
+## Artifacts built 2026-10-27 (WSL box, tahamsaglam fork) — ready to flash
+
+Built on a WSL2 host (kernel 6.18.33.2-microsoft-standard-WSL2), repo cloned at
+`whyred` tip `269a211` + the `mkadt` fix below. CI: fork
+`tahamsaglam/ios-whyred2`, Actions enabled via API, run `40531967701` green.
+
+| Artifact | Size | sha256 |
+| --- | --- | --- |
+| `shim/out/shim-boot.img` (local, real D22AP `/product` ADT, normal cmdline) | 5,849,088 | `134a4028f77ee27c07cb6856ef900840c2a3229bec93f3117d1a484a844e6118` |
+| `build/ci-images/shim-boot.img` (CI, ADT without `/product`) | 5,844,992 | `90107e76bef4a33c600c7f1b7876cbc54870d40efdb8e0e3ab35e0a78a35e4c6` |
+| `build/ci-images/shim-boot-log.img` (log mode) | 5,844,992 | `621221f89efbb2196fe2cfd5a0e3d5fbe7c9e444e619b9ed5a913693292c8eb0` |
+| `build/ios16-root.simg` (iPhone X 16.7.16 20H392, tweaked, fsck OK) | 12,146,082,144 | `1c98adf17b5030c42a1546249de98d87c34a0e8e1c1c73ca7efd5ecc454659ec` |
+| `kernel.development.whyred` (CI artifact) | 17,836,592 | sha in `xnu/out/SHA256SUMS`, LSE scan 0 hits |
+
+Verified inside the final simg (mounted ro): `_PanicOnCrasX` rename present,
+`BKNoWatchdogs`/`SetupDone` prefs, `systembag.kb`, shared-cache hard links in
+`/System/Library/Caches/com.apple.dyld`, `libobjc-trampolines` nlink 2,
+containers created. `d22ap.adt` (186,084 B, extracted from
+`Firmware/all_flash/DeviceTree.d22ap.im4p` with ipsw 3.1.739) sits in
+`research/ipsw-x/`; `mkadt.py` emits `/product` with 61 real properties.
+
+**Host workarounds (needed on any WSL box):**
+
+- `mkadt.py:70` unpacked `c.props` (3-tuples) as 2 → the tool never parsed a
+  real ADT; fixed in commit `29ef14a`.
+- The microsoft-standard WSL kernel has **no `hfsplus`**. Built it out of
+  tree from tag `linux-msft-wsl-6.18.33.2` with `/proc/config.gz` (vermagic
+  needs `LOCALVERSION=` on the make line; module BTF base grafted from
+  `/sys/kernel/btf/vmlinux` onto a stub `vmlinux`). `/lib/modules` is a tmpfs:
+  reinstall the `.ko` after every reboot.
+- Heavy `apfs-fuse` reads concurrent with journalled HFS+ loop-writeback
+  **panicked WSL twice at ~90 s**. `build/mkroot-safe.sh` splits the phases
+  (FUSE extract to plain tree first; HFS+ written via `losetup --direct-io`
+  + `mount -o force,sync`) and is resumable; 7 MB/s but completes.
+
+Flash: `fastboot -S 512M flash userdata ios16-root.simg` (~5 min),
+`fastboot flash recovery shim-boot.img`, `fastboot reboot recovery`.
+First boot task: pull the SYSTEM ring with `tools/sweet-log-pull.sh` and
+`grep 'SWEET FB: '` — the user client logs every selector backboardd calls,
+which names the presentation gap exactly.
+
 ## 0173 build fix (2026-10-27): the first image booted the ramdisk probe
 
 The log from `/home/n1709/whyred-0173.img` is the **ramdisk probe**, not the
