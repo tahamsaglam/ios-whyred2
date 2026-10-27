@@ -60,6 +60,17 @@ window dump; `QUP_MX_WRITE_CNT/READ_CNT` semantics under v2 TAGS is a
 declared hardware unknown and shows up as OPER/STATUS printouts, the poll
 loops are bounded so it cannot hang).
 
+**Buttons (0181 shape, verified)**: `pm660.dtsi` `pm660_pon` at USID
+**0** (`SPMI_USID` = 0 in `dt-bindings/spmi/spmi.h`), peripheral `0x08`:
+pon_1 = PON1/KEY_POWER (116), pon_2 = PON2/**KEY_VOLUMEDOWN** (114); the
+README's volume-up-on-PMIC-GPIO is not confirmed in whyred's DT (PM660
+and PM660L each expose a plain `qcom,spmi-gpio` block).
+`bsd/dev/sweet_keys.c` (0060) already reads PON + a PMIC GPIO through
+observer lanes, gated `sweetkeys`; 0087-topaz shows the per-board define
+remap pattern (`KEYS_PON_RT 0x0810` is the same register on both PMICs).
+Whyred 0181 = APID lookup by ppid `0x0800` plus the vol-up GPIO ppid
+once hardware shows which pin.
+
 Flash: `fastboot -S 512M flash userdata ios16-root.simg` (~5 min),
 `fastboot flash recovery shim-boot.img`, `fastboot reboot recovery`.
 First boot task: pull the SYSTEM ring with `tools/sweet-log-pull.sh` and
