@@ -19,7 +19,7 @@ diff --git a/bsd/dev/sweet_i2c.c b/bsd/dev/sweet_i2c.c
 new file mode 100644
 --- /dev/null
 +++ b/bsd/dev/sweet_i2c.c
-@@ -0,0 +1,330 @@
+@@ -0,0 +1,331 @@
 +/*
 + * whyred / SDM636: BLSP1 QUP v2 I2C master on i2c_1.
 + *
@@ -40,6 +40,7 @@ new file mode 100644
 + */
 +
 +#include <machine/machine_routines.h>
++#include <kern/clock.h>
 +#include <pexpert/pexpert.h>
 +#include <sys/param.h>
 +
