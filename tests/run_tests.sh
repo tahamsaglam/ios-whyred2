@@ -22,6 +22,7 @@ P142="xnu/patches/0142-santoni-sdhci-emmc-driver.patch"
 P143="xnu/patches/0143-santoni-persistent-console-log.patch"
 P144="xnu/patches/0144-santoni-4k-unsigned-dyld-cache.patch"
 P180="xnu/patches/0180-whyred-blsp-qup-i2c-touch-probe.patch"
+P181="xnu/patches/0181-whyred-pmic-keys-arb-v2.patch"
 
 echo "== host unit tests (-Wall -Wextra) =="
 for t in test_sdhci_mock test_gpt_parser test_log_ring; do
@@ -841,6 +842,26 @@ if [ -n "${XNU_SRC:-}" ]; then
 		echo "0180 does not apply to $XNU_SRC"; exit 1; }
 fi
 echo "ok   0180 ships the QUP/GCC/TLMM/NVT constants and hooks the probe"
+
+echo "== KEYS-01: PMIC keys on the SDM636 arbiter v2 (0181) =="
+test -f "$P181"
+for want in \
+	'+++ b/bsd/dev/sweet_keys.c' \
+	'#define KEYS_CORE_PA     0x0800f000u' \
+	'#define KEYS_OBS_PA      0x09400000u' \
+	'#define KEYS_CNFG_PA     0x0800a000u' \
+	'#define KEYS_MAP_OFF     0x10u' \
+	'#define KEYS_PPID_PON    0x008u' \
+	'ARM64_BOARD_CONFIG_WHYRED'
+do
+	grep -qF -- "$want" "$P181" || {
+		echo "0181 does not ship: $want"; exit 1; }
+done
+if [ -n "${XNU_SRC:-}" ]; then
+	(cd "$XNU_SRC" && git apply --check "$OLDPWD/$P181") || {
+		echo "0181 does not apply to $XNU_SRC"; exit 1; }
+fi
+echo "ok   0181 switches sweet_keys to the v2 CHNLn table and v2 obs stride"
 # Optional deep check: if a patched XNU source tree is provided, the three
 # patches must also apply to it as-is (git apply --check).
 if [ -n "${XNU_SRC:-}" ]; then

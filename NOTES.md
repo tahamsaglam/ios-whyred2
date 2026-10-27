@@ -48,9 +48,9 @@ rail GPIO on whyred: the novatek node's supplies are commented out in the
 DSI and ABL leaves the rails on for charger-mode touch - no PMIC write is
 needed to probe. (For the buttons/RTC patches: PMIC arbiter is v2, core
 `0x0800f000`, per-APID WR channel `0x08400000` + `0x10000 * apid` with
-CMD 0x00/STATUS 0x08/WDATA0 0x10, CNFG `0x0800a000` with the APID map at
-cnfg + 0x1000 + 4 * apid (valid BIT(15), ppid = entry >> 16),
-cmd = `(opc << 27) | ((addr & 0xff) << 4) | bc`, data written *before*
+CMD 0x00/STATUS 0x08/WDATA0 0x10, the APID table in CORE CHNLn at
+`0x10 + 4 * apid` with ppid = `(entry >> 8) & 0xfff`, owner EE at
+cnfg `0x0800a000` + `0x700 + 4 * apid`,
 the cmd, DONE BIT(0) and failures in bits 1-3 - see the in-tree
 `drivers/spmi/spmi-pmic-arb.c`.) A DSX panel variant may instead answer
 on `0x20` (`0x2c` ub) - probe both, like the vendor driver. First
@@ -68,8 +68,10 @@ and PM660L each expose a plain `qcom,spmi-gpio` block).
 `bsd/dev/sweet_keys.c` (0060) already reads PON + a PMIC GPIO through
 observer lanes, gated `sweetkeys`; 0087-topaz shows the per-board define
 remap pattern (`KEYS_PON_RT 0x0810` is the same register on both PMICs).
-Whyred 0181 = APID lookup by ppid `0x0800` plus the vol-up GPIO ppid
-once hardware shows which pin.
+Shipped as **0181**: sweet_keys gets a whyred branch with the v2 CHNLn
+table (ppid search key = peripheral only: PON `0x008`, GPIO `0x0c0`),
+observer stride `0x8000`, count 512, PON-only polling until a boot names
+the volume-up pin.
 
 Flash: `fastboot -S 512M flash userdata ios16-root.simg` (~5 min),
 `fastboot flash recovery shim-boot.img`, `fastboot reboot recovery`.
